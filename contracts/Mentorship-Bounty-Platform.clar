@@ -321,3 +321,164 @@
 (define-read-only (get-next-bounty-id)
   (var-get next-bounty-id)
 )
+
+(define-map mentor-achievements
+  { mentor: principal }
+  {
+    sessions-milestone: uint,
+    earnings-milestone: uint,
+    consistency-streak: uint,
+    excellence-badges: uint,
+    mentor-of-month: uint,
+    total-achievement-points: uint,
+    last-achievement-at: uint
+  }
+)
+
+(define-map achievement-rewards
+  { mentor: principal, achievement-type: (string-ascii 20) }
+  {
+    awarded-at: uint,
+    bonus-amount: uint,
+    achievement-level: uint
+  }
+)
+
+(define-data-var achievement-fund uint u0)
+(define-data-var monthly-top-mentor (optional principal) none)
+(define-data-var current-month-block uint u0)
+
+(define-constant achievement-session-milestones (list u5 u10 u25 u50 u100))
+(define-constant achievement-earnings-milestones (list u1000000000 u5000000000 u10000000000 u50000000000))
+(define-constant achievement-bonuses (list u5000000 u10000000 u25000000 u50000000 u100000000))
+
+(define-public (initialize-mentor-achievements (mentor principal))
+  (begin
+    (asserts! (is-some (map-get? mentor-profiles { mentor: mentor })) err-unauthorized)
+    (asserts! (is-none (map-get? mentor-achievements { mentor: mentor })) err-already-exists)
+    (ok (map-set mentor-achievements
+      { mentor: mentor }
+      {
+        sessions-milestone: u0,
+        earnings-milestone: u0,
+        consistency-streak: u0,
+        excellence-badges: u0,
+        mentor-of-month: u0,
+        total-achievement-points: u0,
+        last-achievement-at: u0
+      }
+    ))
+  )
+)
+
+(define-public (check-session-milestone (mentor principal))
+  (let (
+    (mentor-profile (unwrap! (map-get? mentor-profiles { mentor: mentor }) err-not-found))
+    (achievements (unwrap! (map-get? mentor-achievements { mentor: mentor }) err-not-found))
+    (current-sessions (get completed-sessions mentor-profile))
+    (current-milestone (get sessions-milestone achievements))
+  )
+    (let ((next-milestone (+ current-milestone u1)))
+      (if (and 
+        (< current-milestone (len achievement-session-milestones))
+        (>= current-sessions (unwrap-panic (element-at achievement-session-milestones current-milestone))))
+        (begin
+          (map-set mentor-achievements
+            { mentor: mentor }
+            (merge achievements {
+              sessions-milestone: next-milestone,
+              total-achievement-points: (+ (get total-achievement-points achievements) u10),
+              last-achievement-at: stacks-block-height
+            })
+          )
+          (try! (award-achievement-bonus mentor "session-milestone" next-milestone))
+          (ok true)
+        )
+        (ok false)
+      )
+    )
+  )
+)
+
+(define-public (check-earnings-milestone (mentor principal))
+  (let (
+    (mentor-profile (unwrap! (map-get? mentor-profiles { mentor: mentor }) err-not-found))
+    (achievements (unwrap! (map-get? mentor-achievements { mentor: mentor }) err-not-found))
+    (current-earnings (get total-earnings mentor-profile))
+    (current-milestone (get earnings-milestone achievements))
+  )
+    (let ((next-milestone (+ current-milestone u1)))
+      (if (and 
+        (< current-milestone (len achievement-earnings-milestones))
+        (>= current-earnings (unwrap-panic (element-at achievement-earnings-milestones current-milestone))))
+        (begin
+          (map-set mentor-achievements
+            { mentor: mentor }
+            (merge achievements {
+              earnings-milestone: next-milestone,
+              total-achievement-points: (+ (get total-achievement-points achievements) u20),
+              last-achievement-at: stacks-block-height
+            })
+          )
+          (try! (award-achievement-bonus mentor "earnings-milestone" next-milestone))
+          (ok true)
+        )
+        (ok false)
+      )
+    )
+  )
+)
+
+(define-private (award-achievement-bonus (mentor principal) (achievement-type (string-ascii 20)) (level uint))
+  (let (
+    (bonus-amount (if (< level (len achievement-bonuses))
+      (unwrap-panic (element-at achievement-bonuses (- level u1)))
+      u0))
+    (fund-balance (var-get achievement-fund))
+  )
+    (if (and (> bonus-amount u0) (>= fund-balance bonus-amount))
+      (begin
+        (try! (as-contract (stx-transfer? bonus-amount tx-sender mentor)))
+        (var-set achievement-fund (- fund-balance bonus-amount))
+        (map-set achievement-rewards
+          { mentor: mentor, achievement-type: achievement-type }
+          {
+            awarded-at: stacks-block-height,
+            bonus-amount: bonus-amount,
+            achievement-level: level
+          }
+        )
+        (ok true)
+      )
+      (ok false)
+    )
+  )
+)
+
+(define-public (fund-achievement-system (amount uint))
+  (begin
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    (var-set achievement-fund (+ (var-get achievement-fund) amount))
+    (ok true)
+  )
+)
+
+(define-public (trigger-achievement-check (mentor principal))
+  (begin
+    (try! (check-session-milestone mentor))
+    (try! (check-earnings-milestone mentor))
+    (ok true)
+  )
+)
+
+(define-read-only (get-mentor-achievements (mentor principal))
+  (map-get? mentor-achievements { mentor: mentor })
+)
+
+(define-read-only (get-achievement-reward (mentor principal) (achievement-type (string-ascii 20)))
+  (map-get? achievement-rewards { mentor: mentor, achievement-type: achievement-type })
+)
+
+(define-read-only (get-achievement-fund-balance)
+  (var-get achievement-fund)
+)
