@@ -482,3 +482,113 @@
 (define-read-only (get-achievement-fund-balance)
   (var-get achievement-fund)
 )
+
+(define-map mentor-ratings
+  { mentor: principal, rater: principal, bounty-id: uint }
+  {
+    communication-score: uint,
+    knowledge-score: uint,
+    helpfulness-score: uint,
+    overall-rating: uint,
+    feedback: (string-ascii 200),
+    rated-at: uint
+  }
+)
+
+(define-map mentor-reputation
+  { mentor: principal }
+  {
+    total-ratings: uint,
+    average-communication: uint,
+    average-knowledge: uint,
+    average-helpfulness: uint,
+    overall-reputation: uint,
+    reputation-points: uint,
+    last-updated: uint
+  }
+)
+
+(define-data-var rating-weight-factor uint u100)
+
+(define-public (rate-mentor (bounty-id uint) (mentor principal) 
+                           (communication-score uint) (knowledge-score uint) 
+                           (helpfulness-score uint) (feedback (string-ascii 200)))
+  (let (
+    (bounty (unwrap! (map-get? bounties { bounty-id: bounty-id }) err-not-found))
+    (mentee tx-sender)
+    (overall-rating (/ (+ communication-score knowledge-score helpfulness-score) u3))
+  )
+    (asserts! (is-eq mentee (get mentee bounty)) err-unauthorized)
+    (asserts! (is-eq (get status bounty) "completed") err-invalid-status)
+    (asserts! (is-eq (some mentor) (get mentor bounty)) err-unauthorized)
+    (asserts! (and (<= communication-score u10) (>= communication-score u1)) err-invalid-amount)
+    (asserts! (and (<= knowledge-score u10) (>= knowledge-score u1)) err-invalid-amount)
+    (asserts! (and (<= helpfulness-score u10) (>= helpfulness-score u1)) err-invalid-amount)
+    (asserts! (is-none (map-get? mentor-ratings { mentor: mentor, rater: mentee, bounty-id: bounty-id })) err-already-exists)
+    
+    (map-set mentor-ratings
+      { mentor: mentor, rater: mentee, bounty-id: bounty-id }
+      {
+        communication-score: communication-score,
+        knowledge-score: knowledge-score,
+        helpfulness-score: helpfulness-score,
+        overall-rating: overall-rating,
+        feedback: feedback,
+        rated-at: stacks-block-height
+      }
+    )
+    (begin
+      (update-mentor-reputation mentor)
+      (ok true)
+    )
+  )
+)
+
+(define-private (update-mentor-reputation (mentor principal))
+  (let (
+    (current-rep (default-to 
+      { total-ratings: u0, average-communication: u5, average-knowledge: u5, 
+        average-helpfulness: u5, overall-reputation: u5, reputation-points: u0, 
+        last-updated: u0 }
+      (map-get? mentor-reputation { mentor: mentor })))
+    (old-total (get total-ratings current-rep))
+    (new-total (+ old-total u1))
+  )
+    (let (
+      (comm-avg u5)
+      (know-avg u5) 
+      (help-avg u5)
+      (overall-rep u5)
+    )
+      (map-set mentor-reputation
+        { mentor: mentor }
+        {
+          total-ratings: new-total,
+          average-communication: comm-avg,
+          average-knowledge: know-avg,
+          average-helpfulness: help-avg,
+          overall-reputation: overall-rep,
+          reputation-points: (calculate-reputation-points overall-rep new-total),
+          last-updated: stacks-block-height
+        }
+      )
+    )
+  )
+)
+
+(define-private (calculate-reputation-points (overall-rep uint) (total-ratings uint))
+  (let ((base-points (* overall-rep (var-get rating-weight-factor))))
+    (if (>= total-ratings u10)
+      (+ base-points (* total-ratings u50))
+      base-points
+    )
+  )
+)
+
+(define-read-only (get-mentor-reputation (mentor principal))
+  (map-get? mentor-reputation { mentor: mentor })
+)
+
+(define-read-only (get-mentor-rating (mentor principal) (rater principal) (bounty-id uint))
+  (map-get? mentor-ratings { mentor: mentor, rater: rater, bounty-id: bounty-id })
+)
