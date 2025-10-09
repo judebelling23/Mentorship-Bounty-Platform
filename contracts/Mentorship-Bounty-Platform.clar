@@ -7,6 +7,10 @@
 (define-constant err-invalid-status (err u105))
 (define-constant err-insufficient-funds (err u106))
 
+(define-constant err-badge-not-found (err u301))
+(define-constant err-invalid-badge-tier (err u302))
+(define-constant err-requirements-not-met (err u303))
+
 (define-data-var next-bounty-id uint u1)
 (define-data-var platform-fee-rate uint u250)
 
@@ -591,4 +595,77 @@
 
 (define-read-only (get-mentor-rating (mentor principal) (rater principal) (bounty-id uint))
   (map-get? mentor-ratings { mentor: mentor, rater: rater, bounty-id: bounty-id })
+)
+
+(define-map mentor-skill-badges
+  { mentor: principal, skill-domain: (string-ascii 30) }
+  {
+    badge-tier: uint,
+    earned-at: uint,
+    sessions-with-badge: uint,
+    badge-rating: uint,
+    verified-by: principal,
+    price-multiplier: uint
+  }
+)
+
+(define-map skill-badge-requirements
+  { skill-domain: (string-ascii 30), tier: uint }
+  {
+    min-sessions: uint,
+    min-earnings: uint,
+    min-reputation: uint,
+    price-boost: uint
+  }
+)
+
+(define-data-var badge-authority principal tx-sender)
+
+(define-public (initialize-badge-requirements)
+  (begin
+    (map-set skill-badge-requirements { skill-domain: "Clarity Expert", tier: u1 }
+      { min-sessions: u5, min-earnings: u500000000, min-reputation: u6, price-boost: u120 })
+    (map-set skill-badge-requirements { skill-domain: "Clarity Expert", tier: u2 }
+      { min-sessions: u15, min-earnings: u2000000000, min-reputation: u8, price-boost: u150 })
+    (map-set skill-badge-requirements { skill-domain: "DeFi Specialist", tier: u1 }
+      { min-sessions: u10, min-earnings: u1000000000, min-reputation: u7, price-boost: u130 })
+    (map-set skill-badge-requirements { skill-domain: "Security Auditor", tier: u1 }
+      { min-sessions: u8, min-earnings: u800000000, min-reputation: u8, price-boost: u140 })
+    (ok true)
+  )
+)
+
+(define-public (award-skill-badge (mentor principal) (skill-domain (string-ascii 30)) (tier uint))
+  (let (
+    (mentor-profile (unwrap! (map-get? mentor-profiles { mentor: mentor }) err-not-found))
+    (mentor-rep (unwrap! (map-get? mentor-reputation { mentor: mentor }) err-not-found))
+    (requirements (unwrap! (map-get? skill-badge-requirements { skill-domain: skill-domain, tier: tier }) err-badge-not-found))
+  )
+    (asserts! (is-eq tx-sender (var-get badge-authority)) err-unauthorized)
+    (asserts! (>= (get completed-sessions mentor-profile) (get min-sessions requirements)) err-requirements-not-met)
+    (asserts! (>= (get total-earnings mentor-profile) (get min-earnings requirements)) err-requirements-not-met)
+    (asserts! (>= (get overall-reputation mentor-rep) (get min-reputation requirements)) err-requirements-not-met)
+    (ok (map-set mentor-skill-badges
+      { mentor: mentor, skill-domain: skill-domain }
+      {
+        badge-tier: tier,
+        earned-at: stacks-block-height,
+        sessions-with-badge: u0,
+        badge-rating: u10,
+        verified-by: tx-sender,
+        price-multiplier: (get price-boost requirements)
+      }
+    ))
+  )
+)
+
+(define-read-only (get-mentor-badge (mentor principal) (skill-domain (string-ascii 30)))
+  (map-get? mentor-skill-badges { mentor: mentor, skill-domain: skill-domain })
+)
+
+(define-read-only (calculate-badge-adjusted-rate (mentor principal) (base-rate uint) (skill-domain (string-ascii 30)))
+  (match (map-get? mentor-skill-badges { mentor: mentor, skill-domain: skill-domain })
+    badge (ok (/ (* base-rate (get price-multiplier badge)) u100))
+    (ok base-rate)
+  )
 )
