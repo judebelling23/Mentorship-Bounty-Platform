@@ -1,0 +1,31 @@
+[project]
+name = 'Mentorship-Bounty-Platform'
+description = ''
+authors = []
+telemetry = true
+cache_dir = '.\.cache'
+requirements = []
+[contracts.Mentorship-Bounty-Platform]
+path = 'contracts/Mentorship-Bounty-Platform.clar'
+clarity_version = 3
+epoch = 3.1
+[contracts.session-scheduler]
+path = 'contracts/session-scheduler.clar'
+clarity_version = 3
+epoch = 3.1
+[contracts.mentor-leaderboard]
+path = 'contracts/mentor-leaderboard.clar'
+clarity_version = 3
+epoch = 3.1
+[repl.analysis]
+passes = ['check_checker']
+
+[repl.analysis.check_checker]
+strict = false
+trusted_sender = false
+trusted_caller = false
+callee_filter = false
+
+[repl.remote_data]
+enabled = false
+api_url = 'https://api.hiro.so'
